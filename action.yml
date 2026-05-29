@@ -1,0 +1,90 @@
+name: "GH Pulse Scout"
+description: "Analyze recent GitHub issues and post an AI-powered status report."
+author: "gh-pulse-scout"
+
+inputs:
+  repo:
+    description: "Target repository in owner/repo format. Defaults to the current repo."
+    required: false
+    default: ${{ github.repository }}
+  days:
+    description: "Lookback window in days."
+    required: false
+    default: "30"
+  github-token:
+    description: "GitHub token for API access."
+    required: true
+  openai-api-key:
+    description: "OpenAI-compatible API key. If empty, AI summary is skipped."
+    required: false
+    default: ""
+  openai-base-url:
+    description: "OpenAI-compatible base URL."
+    required: false
+    default: "https://api.openai.com/v1"
+  openai-model:
+    description: "OpenAI model name."
+    required: false
+    default: "gpt-4o-mini"
+  dingtalk-webhook:
+    description: "DingTalk robot webhook URL. If set, the report is also sent there."
+    required: false
+    default: ""
+  dingtalk-secret:
+    description: "DingTalk robot secret for signed messages."
+    required: false
+    default: ""
+  output-file:
+    description: "Optional path to write the rendered report."
+    required: false
+    default: "pulse-report.md"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install gh-pulse-scout
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci --omit=dev || npm install --omit=dev
+        npm run build
+
+    - name: Run gh-pulse-scout
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        OPENAI_BASE_URL: ${{ inputs.openai-base-url }}
+        OPENAI_MODEL: ${{ inputs.openai-model }}
+        DINGTALK_WEBHOOK: ${{ inputs.dingtalk-webhook }}
+        DINGTALK_SECRET: ${{ inputs.dingtalk-secret }}
+      run: |
+        NOTIFY_FLAG=""
+        if [ -n "${{ inputs.dingtalk-webhook }}" ]; then
+          NOTIFY_FLAG="--notify dingtalk"
+        fi
+        AI_FLAG=""
+        if [ -z "${{ inputs.openai-api-key }}" ]; then
+          AI_FLAG="--no-ai"
+        fi
+        node "${{ github.action_path }}/dist/cli.js" \
+          --repo "${{ inputs.repo }}" \
+          --days "${{ inputs.days }}" \
+          --output "${{ inputs.output-file }}" \
+          $AI_FLAG $NOTIFY_FLAG
+
+    - name: Summary
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.output-file }}" ]; then
+          {
+            echo "## GH Pulse Scout report"
+            echo ""
+            cat "${{ inputs.output-file }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
