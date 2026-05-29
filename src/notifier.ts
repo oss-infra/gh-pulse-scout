@@ -15,27 +15,49 @@ function sign(secret: string, timestamp: number): string {
 
 function buildMarkdown(result: AnalysisResult, aiReport?: string): string {
     const eff = result.responseEfficiency;
-    const labels =
-        result.topLabels.map((l) => `- \`${l.name}\`: ${l.count}`).join('\n') || '- (none)';
-    const hot =
-        result.topHotIssues
-            .map((i) => `- [#${i.number} ${i.title}](${i.url}) — 💬 ${i.comments}`)
-            .join('\n') || '- (none)';
+    const avg =
+      eff.avgCloseHours != null
+        ? eff.avgCloseDays! >= 1
+          ? `${eff.avgCloseDays!.toFixed(1)}d`
+          : `${eff.avgCloseHours.toFixed(1)}h`
+        : "N/A";
 
-    const base =
-        `# 📊 GitHub Pulse Scout — ${result.repo}\n\n` +
-        `**Window**: ${result.sinceISO} → ${result.untilISO}\n\n` +
-        `## Activity\n` +
-        `- 🆕 New: **${result.activity.created}**\n` +
-        `- ✅ Closed: **${result.activity.closed}**\n` +
-        `- 📂 Open: **${result.activity.open}**\n\n` +
-        `## Response\n` +
-        `- Avg close time: ${eff.avgCloseHours != null ? `${eff.avgCloseHours.toFixed(1)}h (${eff.avgCloseDays!.toFixed(2)}d)` : 'N/A'}\n` +
-        `- Unique authors: ${result.participation.uniqueAuthors}\n\n` +
-        `## Top labels\n${labels}\n\n` +
-        `## Hottest issues\n${hot}\n`;
+    // Compact one-line stat strip — easy to scan on a phone.
+    const statLine =
+      `🆕 ${result.activity.created} · ` +
+      `✅ ${result.activity.closed} · ` +
+      `📂 ${result.activity.open} · ` +
+      `⏱ ${avg} · ` +
+      `👤 ${result.participation.uniqueAuthors}`;
 
-    return aiReport ? `${base}\n---\n\n## 🤖 AI Summary\n\n${aiReport}` : base;
+    // At most 3 hot issues, short titles, no extra metadata noise.
+    const hotItems = result.topHotIssues.slice(0, 3).map((i) => {
+      const title = i.title.length > 48 ? `${i.title.slice(0, 47)}…` : i.title;
+      return `- [#${i.number}](${i.url}) ${title} · 💬 ${i.comments}`;
+    });
+
+    const parts: string[] = [];
+    parts.push(`#### 📊 ${result.repo}`);
+    parts.push(
+      `> ${result.sinceISO.slice(0, 10)} → ${result.untilISO.slice(0, 10)}`,
+    );
+    parts.push("");
+    parts.push(statLine);
+
+    if (aiReport) {
+      parts.push("");
+      parts.push("---");
+      parts.push("");
+      parts.push(aiReport.trim());
+    }
+
+    if (hotItems.length > 0) {
+      parts.push("");
+      parts.push("**🔥 热门 issue**");
+      parts.push(...hotItems);
+    }
+
+    return parts.join("\n");
 }
 
 export async function sendDingtalk(

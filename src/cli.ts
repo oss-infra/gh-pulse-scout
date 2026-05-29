@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { fetchIssues } from './github.js';
 import { analyzeIssues } from './analyzer.js';
-import { generateAiReport, buildPrompt } from './ai.js';
+import { generateAiReport, buildPrompt, checkModel } from "./ai.js";
 import { buildIssueCorpus } from './corpus.js';
 import { renderConsoleReport } from './reporter.js';
 import { Cache } from './cache.js';
@@ -16,79 +16,129 @@ import type { CliOptions } from './types.js';
 const program = new Command();
 
 program
-    .name('gh-pulse-scout')
-    .description('Fetch recent GitHub issues for a repo and generate an AI-powered status report.')
-    .version('0.1.0')
-    .requiredOption('-r, --repo <owner/repo>', 'GitHub repository, e.g. "octocat/Hello-World"')
-    .option('-d, --days <number>', 'Lookback window in days', (v) => parseInt(v, 10), 30)
-    .option('--no-ai', 'Skip AI summary generation')
-    .option('--no-cache', 'Disable local cache')
-    .option('--cache-ttl <seconds>', 'Cache TTL in seconds', (v) => parseInt(v, 10), 3600)
-    .option('--json', 'Print analysis as JSON only', false)
-    .option('-o, --output <file>', 'Write the full report (text + AI) to a file')
-    .option('--notify <channel>', 'Send report to a channel (supported: dingtalk)')
-    .option(
-        '--max-context-chars <n>',
-        'Max characters of inlined issue corpus passed to the model',
-        (v) => parseInt(v, 10),
-        60000,
-    )
-    .option(
-        '--max-issue-body-chars <n>',
-        'Max characters retained per issue body in the inlined corpus',
-        (v) => parseInt(v, 10),
-        1200,
-    )
-    .option(
-        '--max-issues-in-context <n>',
-        'Hard cap on number of issues considered for the inlined corpus',
-        (v) => parseInt(v, 10),
-        80,
-    )
-    .option(
-        '--context-file <file>',
-        'Path to write the full (untruncated) issue corpus. Defaults to a path under .cache/ when AI is enabled.',
-    )
-    .option(
-        '--prompt [file]',
-        'In --no-ai mode, dump the prompt (and corpus attachment path) that would be sent to the AI model. Writes to <file>, or stdout if no path is given. Useful for debugging.',
-    );
+  .name("gh-pulse-scout")
+  .description(
+    "Fetch recent GitHub issues for a repo and generate an AI-powered status report.",
+  )
+  .version("0.1.0")
+  .option(
+    "-r, --repo <owner/repo>",
+    'GitHub repository, e.g. "octocat/Hello-World"',
+  )
+  .option(
+    "-d, --days <number>",
+    "Lookback window in days",
+    (v) => parseInt(v, 10),
+    30,
+  )
+  .option("--no-ai", "Skip AI summary generation")
+  .option(
+    "--no-ai-summary",
+    "Suppress the AI-assisted summary section from console output, saved file, and notifications; only objective stats are shown. The AI call is still skipped to save tokens.",
+  )
+  .option("--no-cache", "Disable local cache")
+  .option(
+    "--cache-ttl <seconds>",
+    "Cache TTL in seconds",
+    (v) => parseInt(v, 10),
+    3600,
+  )
+  .option("--json", "Print analysis as JSON only", false)
+  .option("-o, --output <file>", "Write the full report (text + AI) to a file")
+  .option(
+    "--notify <channel>",
+    "Send report to a channel (supported: dingtalk)",
+  )
+  .option(
+    "--max-context-chars <n>",
+    "Max characters of inlined issue corpus passed to the model",
+    (v) => parseInt(v, 10),
+    60000,
+  )
+  .option(
+    "--max-issue-body-chars <n>",
+    "Max characters retained per issue body in the inlined corpus",
+    (v) => parseInt(v, 10),
+    1200,
+  )
+  .option(
+    "--max-issues-in-context <n>",
+    "Hard cap on number of issues considered for the inlined corpus",
+    (v) => parseInt(v, 10),
+    80,
+  )
+  .option(
+    "--context-file <file>",
+    "Path to write the full (untruncated) issue corpus. Defaults to a path under .cache/ when AI is enabled.",
+  )
+  .option(
+    "--prompt [file]",
+    "In --no-ai mode, dump the prompt (and corpus attachment path) that would be sent to the AI model. Writes to <file>, or stdout if no path is given. Useful for debugging.",
+  )
+  .option(
+    "--model-check",
+    "Print the resolved AI model configuration (from env/flags) and attempt a minimal connectivity probe. Useful for debugging credentials and base URLs.",
+    false,
+  );
 
 program.parseAsync(process.argv).then(async () => {
     const raw = program.opts<{
-        repo: string;
-        days: number;
-        ai: boolean;
-        cache: boolean;
-        cacheTtl: number;
-        json: boolean;
-        output?: string;
-        notify?: string;
-        maxContextChars: number;
-        maxIssueBodyChars: number;
-        maxIssuesInContext: number;
-        contextFile?: string;
-        prompt?: string | boolean;
+      repo?: string;
+      days: number;
+      ai: boolean;
+      aiSummary: boolean;
+      cache: boolean;
+      cacheTtl: number;
+      json: boolean;
+      output?: string;
+      notify?: string;
+      maxContextChars: number;
+      maxIssueBodyChars: number;
+      maxIssuesInContext: number;
+      contextFile?: string;
+      prompt?: string | boolean;
+      modelCheck?: boolean;
     }>();
+
+    if (raw.modelCheck) {
+      try {
+        await runModelCheck();
+        process.exit(0);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(chalk.red(`\n✖ ${msg}\n`));
+        process.exit(1);
+      }
+    }
+
+    if (!raw.repo) {
+      process.stderr.write(
+        chalk.red(
+          "error: required option '-r, --repo <owner/repo>' not specified\n",
+        ),
+      );
+      process.exit(1);
+    }
 
     let promptDump: string | undefined;
     if (raw.prompt === true) promptDump = '';
     else if (typeof raw.prompt === 'string') promptDump = raw.prompt;
 
     const opts: CliOptions = {
-        repo: raw.repo,
-        days: raw.days,
-        noAi: !raw.ai,
-        noCache: !raw.cache,
-        cacheTtl: raw.cacheTtl,
-        json: raw.json,
-        output: raw.output,
-        notify: raw.notify === 'dingtalk' ? 'dingtalk' : undefined,
-        maxContextChars: raw.maxContextChars,
-        maxIssueBodyChars: raw.maxIssueBodyChars,
-        maxIssuesInContext: raw.maxIssuesInContext,
-        contextFile: raw.contextFile,
-        promptDump,
+      repo: raw.repo!,
+      days: raw.days,
+      noAi: !raw.ai,
+      noAiSummary: !raw.aiSummary,
+      noCache: !raw.cache,
+      cacheTtl: raw.cacheTtl,
+      json: raw.json,
+      output: raw.output,
+      notify: raw.notify === "dingtalk" ? "dingtalk" : undefined,
+      maxContextChars: raw.maxContextChars,
+      maxIssueBodyChars: raw.maxIssueBodyChars,
+      maxIssuesInContext: raw.maxIssuesInContext,
+      contextFile: raw.contextFile,
+      promptDump,
     };
 
     try {
@@ -179,68 +229,68 @@ async function run(opts: CliOptions): Promise<void> {
     }
 
     let aiReport: string | undefined;
-    if (!opts.noAi) {
-        const apiKey = process.env['OPENAI_API_KEY'];
-        if (!apiKey) {
-            process.stderr.write(
-                chalk.yellow('⚠️  OPENAI_API_KEY is not set, skipping AI summary.\n'),
-            );
-        } else {
-            const corpus = buildIssueCorpus(issues, {
-                maxContextChars: opts.maxContextChars,
-                maxIssueBodyChars: opts.maxIssueBodyChars,
-                maxIssuesInContext: opts.maxIssuesInContext,
-            });
+    if (!opts.noAi && !opts.noAiSummary) {
+      const apiKey = process.env["OPENAI_API_KEY"];
+      if (!apiKey) {
+        process.stderr.write(
+          chalk.yellow("⚠️  OPENAI_API_KEY is not set, skipping AI summary.\n"),
+        );
+      } else {
+        const corpus = buildIssueCorpus(issues, {
+          maxContextChars: opts.maxContextChars,
+          maxIssueBodyChars: opts.maxIssueBodyChars,
+          maxIssuesInContext: opts.maxIssuesInContext,
+        });
 
-            // Always dump the full untruncated corpus to a file so the user can
-            // re-feed it manually to any LLM client that supports attachments.
-            const safeRepo = opts.repo.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const defaultContextPath = path.join(
-                '.cache',
-                'gh-pulse-scout',
-                `${safeRepo}-issues-${opts.days}d.md`,
-            );
-            const contextPath = opts.contextFile ?? defaultContextPath;
-            try {
-                const dir = path.dirname(contextPath);
-                if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
-                const header =
-                    `# Issue corpus — ${opts.repo}\n` +
-                    `Window: last ${opts.days} days\n` +
-                    `Issues: ${issues.length}\n\n---\n\n`;
-                fs.writeFileSync(contextPath, header + corpus.fullText, 'utf8');
-                process.stderr.write(
-                    chalk.gray(`→ Full issue corpus written to ${contextPath}\n`),
-                );
-            } catch (err) {
-                process.stderr.write(
-                    chalk.yellow(
-                        `⚠️  Could not write corpus file: ${err instanceof Error ? err.message : String(err)}\n`,
-                    ),
-                );
-            }
-
-            process.stderr.write(
-                chalk.gray(
-                    `→ Generating AI summary (inlining ${corpus.includedCount}/${issues.length} issues, ${corpus.inlineText.length} chars${corpus.truncated ? ', some bodies truncated' : ''})...\n`,
-                ),
-            );
-            try {
-                aiReport = await generateAiReport(analysis, corpus, {
-                    apiKey,
-                    baseURL: process.env['OPENAI_BASE_URL'],
-                    model: process.env['OPENAI_MODEL'],
-                    contextFilePath: contextPath,
-                    uploadContextFile: process.env['OPENAI_UPLOAD_CONTEXT'] === '1',
-                });
-            } catch (err) {
-                process.stderr.write(
-                    chalk.yellow(
-                        `⚠️  AI summary failed: ${err instanceof Error ? err.message : String(err)}\n`,
-                    ),
-                );
-            }
+        // Always dump the full untruncated corpus to a file so the user can
+        // re-feed it manually to any LLM client that supports attachments.
+        const safeRepo = opts.repo.replace(/[^a-zA-Z0-9_-]/g, "_");
+        const defaultContextPath = path.join(
+          ".cache",
+          "gh-pulse-scout",
+          `${safeRepo}-issues-${opts.days}d.md`,
+        );
+        const contextPath = opts.contextFile ?? defaultContextPath;
+        try {
+          const dir = path.dirname(contextPath);
+          if (dir && dir !== ".") fs.mkdirSync(dir, { recursive: true });
+          const header =
+            `# Issue corpus — ${opts.repo}\n` +
+            `Window: last ${opts.days} days\n` +
+            `Issues: ${issues.length}\n\n---\n\n`;
+          fs.writeFileSync(contextPath, header + corpus.fullText, "utf8");
+          process.stderr.write(
+            chalk.gray(`→ Full issue corpus written to ${contextPath}\n`),
+          );
+        } catch (err) {
+          process.stderr.write(
+            chalk.yellow(
+              `⚠️  Could not write corpus file: ${err instanceof Error ? err.message : String(err)}\n`,
+            ),
+          );
         }
+
+        process.stderr.write(
+          chalk.gray(
+            `→ Generating AI summary (inlining ${corpus.includedCount}/${issues.length} issues, ${corpus.inlineText.length} chars${corpus.truncated ? ", some bodies truncated" : ""})...\n`,
+          ),
+        );
+        try {
+          aiReport = await generateAiReport(analysis, corpus, {
+            apiKey,
+            baseURL: process.env["OPENAI_BASE_URL"],
+            model: process.env["OPENAI_MODEL"],
+            contextFilePath: contextPath,
+            uploadContextFile: process.env["OPENAI_UPLOAD_CONTEXT"] === "1",
+          });
+        } catch (err) {
+          process.stderr.write(
+            chalk.yellow(
+              `⚠️  AI summary failed: ${err instanceof Error ? err.message : String(err)}\n`,
+            ),
+          );
+        }
+      }
     }
 
     const output = renderConsoleReport(analysis, aiReport);
@@ -271,6 +321,67 @@ async function run(opts: CliOptions): Promise<void> {
             }
         }
     }
+}
+
+async function runModelCheck(): Promise<void> {
+  const apiKey = process.env["OPENAI_API_KEY"];
+  const baseURL = process.env["OPENAI_BASE_URL"];
+  const model = process.env["OPENAI_MODEL"] ?? "gpt-4o-mini";
+  const upload = process.env["OPENAI_UPLOAD_CONTEXT"] === "1";
+
+  const mask = (s: string | undefined): string => {
+    if (!s) return chalk.red("(not set)");
+    if (s.length <= 8) return chalk.green("*".repeat(s.length));
+    return chalk.green(`${s.slice(0, 4)}…${s.slice(-4)} (len=${s.length})`);
+  };
+
+  process.stdout.write(chalk.bold("AI model configuration\n"));
+  process.stdout.write(`  OPENAI_API_KEY        : ${mask(apiKey)}\n`);
+  process.stdout.write(
+    `  OPENAI_BASE_URL       : ${baseURL ? chalk.green(baseURL) : chalk.gray("(default: https://api.openai.com/v1)")}\n`,
+  );
+  process.stdout.write(
+    `  OPENAI_MODEL          : ${chalk.green(model)}${process.env["OPENAI_MODEL"] ? "" : chalk.gray(" (default)")}\n`,
+  );
+  process.stdout.write(
+    `  OPENAI_UPLOAD_CONTEXT : ${upload ? chalk.green("1 (enabled)") : chalk.gray("0 (disabled)")}\n`,
+  );
+  process.stdout.write("\n");
+
+  if (!apiKey) {
+    process.stderr.write(
+      chalk.red("✖ OPENAI_API_KEY is required for the connectivity probe.\n"),
+    );
+    process.exit(1);
+  }
+
+  process.stdout.write(
+    chalk.gray("→ Probing model with a minimal request...\n"),
+  );
+  const started = Date.now();
+  try {
+    const result = await checkModel({ apiKey, baseURL, model });
+    const elapsed = Date.now() - started;
+    process.stdout.write(chalk.green(`✔ Model responded in ${elapsed} ms\n`));
+    process.stdout.write(
+      `  model returned : ${chalk.cyan(result.model ?? "(unknown)")}\n`,
+    );
+    if (result.usage) {
+      process.stdout.write(
+        `  tokens         : prompt=${result.usage.prompt_tokens ?? "?"}, completion=${result.usage.completion_tokens ?? "?"}, total=${result.usage.total_tokens ?? "?"}\n`,
+      );
+    }
+    process.stdout.write(
+      `  reply          : ${chalk.dim(JSON.stringify(result.reply))}\n`,
+    );
+  } catch (err) {
+    const elapsed = Date.now() - started;
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      chalk.red(`✖ Probe failed after ${elapsed} ms: ${msg}\n`),
+    );
+    process.exit(1);
+  }
 }
 
 function stripAnsi(s: string): string {

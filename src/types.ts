@@ -58,18 +58,19 @@ export interface AnalysisResult {
 }
 
 export interface CliOptions {
-    repo: string;
-    days: number;
-    noAi: boolean;
-    noCache: boolean;
-    cacheTtl: number;
-    json: boolean;
-    output?: string;
-    notify?: 'dingtalk';
-    maxContextChars: number;
-    maxIssueBodyChars: number;
-    maxIssuesInContext: number;
-    contextFile?: string;
-    /** When set in --no-ai mode, dump the AI prompt for debugging. Empty string means stdout. */
-    promptDump?: string;
+  repo: string;
+  days: number;
+  noAi: boolean;
+  noAiSummary: boolean;
+  noCache: boolean;
+  cacheTtl: number;
+  json: boolean;
+  output?: string;
+  notify?: "dingtalk";
+  maxContextChars: number;
+  maxIssueBodyChars: number;
+  maxIssuesInContext: number;
+  contextFile?: string;
+  /** When set in --no-ai mode, dump the AI prompt for debugging. Empty string means stdout. */
+  promptDump?: string;
 }
