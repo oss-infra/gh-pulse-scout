@@ -26,18 +26,18 @@ inputs:
     description: "OpenAI model name."
     required: false
     default: "gpt-4o-mini"
-  dingtalk-webhook:
-    description: "DingTalk robot webhook URL. If set, the report is also sent there."
-    required: false
-    default: ""
-  dingtalk-secret:
-    description: "DingTalk robot secret for signed messages."
-    required: false
-    default: ""
   output-file:
     description: "Optional path to write the rendered report."
     required: false
     default: "pulse-report.md"
+
+outputs:
+  report-file:
+    description: "Path to the rendered Markdown report file."
+    value: ${{ steps.run.outputs.report-file }}
+  report:
+    description: "The rendered Markdown report content (text + AI summary)."
+    value: ${{ steps.run.outputs.report }}
 
 runs:
   using: "composite"
@@ -55,19 +55,14 @@ runs:
         npm run build
 
     - name: Run gh-pulse-scout
+      id: run
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         OPENAI_BASE_URL: ${{ inputs.openai-base-url }}
         OPENAI_MODEL: ${{ inputs.openai-model }}
-        DINGTALK_WEBHOOK: ${{ inputs.dingtalk-webhook }}
-        DINGTALK_SECRET: ${{ inputs.dingtalk-secret }}
       run: |
-        NOTIFY_FLAG=""
-        if [ -n "${{ inputs.dingtalk-webhook }}" ]; then
-          NOTIFY_FLAG="--notify dingtalk"
-        fi
         AI_FLAG=""
         if [ -z "${{ inputs.openai-api-key }}" ]; then
           AI_FLAG="--no-ai"
@@ -76,7 +71,16 @@ runs:
           --repo "${{ inputs.repo }}" \
           --days "${{ inputs.days }}" \
           --output "${{ inputs.output-file }}" \
-          $AI_FLAG $NOTIFY_FLAG
+          $AI_FLAG
+
+        echo "report-file=${{ inputs.output-file }}" >> "$GITHUB_OUTPUT"
+        if [ -f "${{ inputs.output-file }}" ]; then
+          {
+            echo "report<<__GH_PULSE_EOF__"
+            cat "${{ inputs.output-file }}"
+            echo "__GH_PULSE_EOF__"
+          } >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Summary
       shell: bash

@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run gh-pulse-scout
+        id: pulse
         uses: ./
         with:
           repo: ${{ github.event.inputs.repo || github.repository }}
@@ -28,5 +29,15 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           openai-base-url: ${{ secrets.OPENAI_BASE_URL }}
           openai-model: ${{ secrets.OPENAI_MODEL }}
-          dingtalk-webhook: ${{ secrets.DINGTALK_WEBHOOK }}
-          dingtalk-secret: ${{ secrets.DINGTALK_SECRET }}
+
+      # The report is exposed as a step output. Pipe it into any notification
+      # action you like (DingTalk, Slack, Lark, Telegram, email, ...).
+      # Example: send the rendered report to a DingTalk robot via a dedicated action.
+      - name: Notify DingTalk
+        uses: ghostket/dingtalk-action@v1
+        with:
+          webhook: ${{ secrets.DINGTALK_WEBHOOK }}
+          secret: ${{ secrets.DINGTALK_SECRET }}
+          msgtype: markdown
+          title: "GH Pulse Scout"
+          text: ${{ steps.pulse.outputs.report }}
