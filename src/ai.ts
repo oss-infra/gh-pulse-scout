@@ -172,3 +172,48 @@ export async function generateAiReport(
     }
     return text;
 }
+
+export interface ModelCheckResult {
+    model?: string;
+    reply: string;
+    usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+    };
+}
+
+/**
+ * Minimal connectivity probe against the configured OpenAI-compatible endpoint.
+ * Sends a tiny prompt and returns the model's reply along with usage info.
+ */
+export async function checkModel(opts: {
+    apiKey: string;
+    baseURL?: string | undefined;
+    model?: string | undefined;
+}): Promise<ModelCheckResult> {
+    const client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });
+    const model = opts.model ?? 'gpt-4o-mini';
+    const completion = await client.chat.completions.create({
+        model,
+        temperature: 0,
+        max_tokens: 16,
+        messages: [
+            { role: 'system', content: 'You are a connectivity probe. Reply with a single short word.' },
+            { role: 'user', content: 'ping' },
+        ],
+    });
+    const reply = completion.choices[0]?.message?.content?.trim() ?? '';
+    const result: ModelCheckResult = {
+        reply,
+    };
+    if (completion.model) result.model = completion.model;
+    if (completion.usage) {
+        result.usage = {
+            prompt_tokens: completion.usage.prompt_tokens,
+            completion_tokens: completion.usage.completion_tokens,
+            total_tokens: completion.usage.total_tokens,
+        };
+    }
+    return result;
+}
