@@ -1,5 +1,5 @@
 name: "GH Pulse Scout"
-description: "Analyze recent GitHub issues over a lookback window and generate an AI-powered Markdown status report exposed as a step output."
+description: "Analyze recent GitHub issues over a lookback window and generate status report."
 author: "gh-pulse-scout"
 
 branding:
