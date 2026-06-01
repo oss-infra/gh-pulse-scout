@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import NodeCache from 'node-cache';
 
 const CACHE_DIR = path.join(process.cwd(), '.cache', 'gh-pulse-scout');
@@ -67,13 +66,5 @@ export class Cache {
         } catch {
             // ignore
         }
-    }
-
-    static cacheDir(): string {
-        return CACHE_DIR;
-    }
-
-    static homeFallback(): string {
-        return path.join(os.homedir(), '.gh-pulse-scout-cache');
     }
 }
