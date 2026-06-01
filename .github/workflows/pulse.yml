@@ -1,13 +1,21 @@
 name: Weekly Pulse Report
 
 on:
-  schedule:
-    - cron: "0 1 * * 1" # every Monday 01:00 UTC
   workflow_dispatch:
     inputs:
       repo:
         description: "owner/repo to analyze (defaults to current repo)"
         required: false
+      days:
+        description: "Lookback window in days (min 7, max 30)"
+        required: false
+        default: "7"
+        type: string
+      language:
+        description: "Output language for the AI summary (auto / English / Chinese / zh / ja / ...)"
+        required: false
+        default: "auto"
+        type: string
 
 jobs:
   pulse:
@@ -19,25 +27,77 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate days input
+        id: days
+        env:
+          DAYS_INPUT: ${{ github.event.inputs.days }}
+        shell: bash
+        run: |
+          d="${DAYS_INPUT:-7}"
+          if ! [[ "$d" =~ ^[0-9]+$ ]]; then
+            echo "::error::days must be an integer, got '$d'"
+            exit 1
+          fi
+          if (( d < 7 || d > 30 )); then
+            echo "::error::days must be between 7 and 30, got '$d'"
+            exit 1
+          fi
+          echo "value=$d" >> "$GITHUB_OUTPUT"
+
       - name: Run gh-pulse-scout
         id: pulse
         uses: ./
         with:
           repo: ${{ github.event.inputs.repo || github.repository }}
-          days: "30"
+          days: ${{ steps.days.outputs.value }}
+          language: ${{ github.event.inputs.language || 'auto' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           openai-base-url: ${{ secrets.OPENAI_BASE_URL }}
           openai-model: ${{ secrets.OPENAI_MODEL }}
 
-      # The report is exposed as a step output. Pipe it into any notification
-      # action you like (DingTalk, Slack, Lark, Telegram, email, ...).
-      # Example: send the rendered report to a DingTalk robot via a dedicated action.
+      # Forward the report to a DingTalk custom robot using plain `curl` —
+      # no third-party action, no token-parsing quirks. `DINGTALK_WEBHOOK`
+      # must be the full webhook URL (https://oapi.dingtalk.com/robot/send?access_token=...).
+      # If `DINGTALK_SECRET` is set, HMAC-SHA256 signing is appended.
       - name: Notify DingTalk
-        uses: ghostket/dingtalk-action@v1
-        with:
-          webhook: ${{ secrets.DINGTALK_WEBHOOK }}
-          secret: ${{ secrets.DINGTALK_SECRET }}
-          msgtype: markdown
-          title: "GH Pulse Scout"
-          text: ${{ steps.pulse.outputs.report }}
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          REPORT: ${{ steps.pulse.outputs.report }}
+        shell: bash
+        run: |
+          if [ -z "$DINGTALK_WEBHOOK" ]; then
+            echo "DINGTALK_WEBHOOK is not set; skipping notification."
+            exit 0
+          fi
+
+          url="$DINGTALK_WEBHOOK"
+          if [ -n "$DINGTALK_SECRET" ]; then
+            ts=$(($(date +%s%N) / 1000000))
+            string_to_sign="${ts}\n${DINGTALK_SECRET}"
+            sign=$(printf "%b" "$string_to_sign" \
+              | openssl dgst -sha256 -hmac "$DINGTALK_SECRET" -binary \
+              | base64)
+            sign_enc=$(jq -rn --arg s "$sign" '$s|@uri')
+            url="${url}&timestamp=${ts}&sign=${sign_enc}"
+          fi
+
+          payload=$(jq -n \
+            --arg title "GH Pulse Scout" \
+            --arg text "$REPORT" \
+            '{msgtype:"markdown", markdown:{title:$title, text:$text}}')
+
+          response=$(curl -fsS -H "Content-Type: application/json" \
+            -d "$payload" "$url")
+          echo "DingTalk response: $response"
+          # DingTalk returns {"errcode":0,...} on success; fail the step otherwise.
+          errcode=$(echo "$response" | jq -r '.errcode // empty')
+          if [ "$errcode" != "0" ]; then
+            echo "::error::DingTalk push failed: $response"
+            exit 1
+          fi
+
+      # For demonstration purposes, also print the report in this job's summary and logs.
+      - name: Result
+        run: echo "🍏 This job's status is ${{ job.status }}."

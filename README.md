@@ -134,11 +134,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: pulse
-        uses: your-org/gh-pulse-scout@v1
+        uses: oss-infra/gh-pulse-scout@v1.0.0
+        name: GH Pulse Scout
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-
       # Forward the report to any notification action you prefer.
       # Example: send to a DingTalk robot via a dedicated action.
       - name: Notify DingTalk

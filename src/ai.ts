@@ -36,13 +36,23 @@ function renderTemplate(name: string, vars: Record<string, string>): string {
 }
 
 export interface AiOptions {
-    apiKey?: string;
-    baseURL?: string;
-    model?: string;
-    /** Path to the dumped full-corpus file (mentioned to the model for traceability). */
-    contextFilePath?: string;
-    /** Best-effort: upload the corpus file via OpenAI Files API and reference it. */
-    uploadContextFile?: boolean;
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+  /** Path to the dumped full-corpus file (mentioned to the model for traceability). */
+  contextFilePath?: string;
+  /** Best-effort: upload the corpus file via OpenAI Files API and reference it. */
+  uploadContextFile?: boolean;
+  /** Output language for the AI summary. "auto" / undefined lets the model choose. */
+  language?: string;
+}
+
+function languageDirective(lang?: string): string {
+  const v = (lang ?? "").trim();
+  if (!v || v.toLowerCase() === "auto") {
+    return "Reply in the language the user most likely speaks; if unclear, use English.";
+  }
+  return `Write the entire response in ${v}. Translate the three section headings into ${v} as well. Keep issue references like "#123" and code identifiers untouched.`;
 }
 
 function buildStatsBlock(result: AnalysisResult): string {
@@ -79,33 +89,35 @@ function buildStatsBlock(result: AnalysisResult): string {
 }
 
 export function buildPrompt(
-    result: AnalysisResult,
-    corpus: CorpusResult | undefined,
-    contextFilePath: string | undefined,
+  result: AnalysisResult,
+  corpus: CorpusResult | undefined,
+  contextFilePath: string | undefined,
+  language?: string,
 ): string {
-    let corpusSection = '';
-    if (corpus && corpus.inlineText.length > 0) {
-        const meta =
-            `Showing ${corpus.includedCount} of ${corpus.includedCount + corpus.droppedCount} issues, ` +
-            `prioritized by open state + comment count + recency` +
-            (corpus.truncated ? ', long bodies truncated.' : '.') +
-            (contextFilePath
-                ? ` The complete, untruncated corpus is also written to "${contextFilePath}".`
-                : '');
-        corpusSection = renderTemplate('corpus-inline.md', {
-            meta,
-            corpus: corpus.inlineText,
-        });
-    } else if (contextFilePath) {
-        corpusSection = renderTemplate('corpus-file-only.md', {
-            path: contextFilePath,
-        });
-    }
-
-    return renderTemplate('report.md', {
-        stats: buildStatsBlock(result),
-        corpus_section: corpusSection,
+  let corpusSection = "";
+  if (corpus && corpus.inlineText.length > 0) {
+    const meta =
+      `Showing ${corpus.includedCount} of ${corpus.includedCount + corpus.droppedCount} issues, ` +
+      `prioritized by open state + comment count + recency` +
+      (corpus.truncated ? ", long bodies truncated." : ".") +
+      (contextFilePath
+        ? ` The complete, untruncated corpus is also written to "${contextFilePath}".`
+        : "");
+    corpusSection = renderTemplate("corpus-inline.md", {
+      meta,
+      corpus: corpus.inlineText,
     });
+  } else if (contextFilePath) {
+    corpusSection = renderTemplate("corpus-file-only.md", {
+      path: contextFilePath,
+    });
+  }
+
+  return renderTemplate("report.md", {
+    stats: buildStatsBlock(result),
+    corpus_section: corpusSection,
+    language_directive: languageDirective(language),
+  });
 }
 
 async function tryUploadAsAttachment(
@@ -151,7 +163,12 @@ export async function generateAiReport(
         }
     }
 
-    const prompt = buildPrompt(result, corpus, opts.contextFilePath);
+    const prompt = buildPrompt(
+      result,
+      corpus,
+      opts.contextFilePath,
+      opts.language,
+    );
     const userContent = attachmentNote ? `${attachmentNote}\n\n${prompt}` : prompt;
 
     const completion = await client.chat.completions.create({
