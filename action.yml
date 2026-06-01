@@ -1,6 +1,10 @@
 name: "GH Pulse Scout"
-description: "Analyze recent GitHub issues and post an AI-powered status report."
+description: "Analyze recent GitHub issues over a lookback window and generate an AI-powered Markdown status report exposed as a step output."
 author: "gh-pulse-scout"
+
+branding:
+  icon: "activity"
+  color: "blue"
 
 inputs:
   repo:
@@ -51,7 +55,14 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
-        npm ci --omit=dev || npm install --omit=dev
+        # Install full deps (including devDependencies like `typescript`,
+        # which is required by `npm run build`). Prefer `npm ci` when a
+        # lockfile is present, otherwise fall back to `npm install`.
+        if [ -f package-lock.json ]; then
+          npm ci --no-audit --no-fund
+        else
+          npm install --no-audit --no-fund
+        fi
         npm run build
 
     - name: Run gh-pulse-scout
