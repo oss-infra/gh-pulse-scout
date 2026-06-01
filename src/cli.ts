@@ -6,11 +6,12 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { fetchIssues } from './github.js';
 import { analyzeIssues } from './analyzer.js';
-import { generateAiReport, buildPrompt } from './ai.js';
+import { generateAiReport, buildPrompt, checkModel } from './ai.js';
 import { buildIssueCorpus } from './corpus.js';
+import type { CorpusResult } from './corpus.js';
 import { renderConsoleReport } from './reporter.js';
 import { Cache } from './cache.js';
-import type { CliOptions } from './types.js';
+import type { CliOptions, IssueData } from './types.js';
 
 const program = new Command();
 
@@ -18,7 +19,7 @@ program
     .name('gh-pulse-scout')
     .description('Fetch recent GitHub issues for a repo and generate an AI-powered status report.')
     .version('0.1.0')
-    .requiredOption('-r, --repo <owner/repo>', 'GitHub repository, e.g. "octocat/Hello-World"')
+    .option('-r, --repo <owner/repo>', 'GitHub repository, e.g. "octocat/Hello-World"')
     .option('-d, --days <number>', 'Lookback window in days', (v) => parseInt(v, 10), 30)
     .option('--no-ai', 'Skip AI summary generation')
     .option('--no-cache', 'Disable local cache')
@@ -50,11 +51,16 @@ program
     .option(
         '--prompt [file]',
         'In --no-ai mode, dump the prompt (and corpus attachment path) that would be sent to the AI model. Writes to <file>, or stdout if no path is given. Useful for debugging.',
+)
+    .option(
+        '--model-check',
+        'Print the resolved AI model configuration (from env/flags) and attempt a minimal connectivity probe. Useful for debugging credentials and base URLs.',
+        false,
     );
 
 program.parseAsync(process.argv).then(async () => {
     const raw = program.opts<{
-        repo: string;
+        repo?: string;
         days: number;
         ai: boolean;
         cache: boolean;
@@ -66,7 +72,26 @@ program.parseAsync(process.argv).then(async () => {
         maxIssuesInContext: number;
         contextFile?: string;
         prompt?: string | boolean;
+        modelCheck?: boolean;
     }>();
+
+    if (raw.modelCheck) {
+        try {
+            await runModelCheck();
+            process.exit(0);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            process.stderr.write(chalk.red(`\n✖ ${msg}\n`));
+            process.exit(1);
+        }
+    }
+
+    if (!raw.repo) {
+        process.stderr.write(
+            chalk.red("error: required option '-r, --repo <owner/repo>' not specified\n"),
+        );
+        process.exit(1);
+    }
 
     let promptDump: string | undefined;
     if (raw.prompt === true) promptDump = '';
@@ -128,37 +153,11 @@ async function run(opts: CliOptions): Promise<void> {
     }
 
     if (opts.noAi && opts.promptDump !== undefined) {
-        const corpus = buildIssueCorpus(issues, {
-            maxContextChars: opts.maxContextChars,
-            maxIssueBodyChars: opts.maxIssueBodyChars,
-            maxIssuesInContext: opts.maxIssuesInContext,
-        });
-
-        const safeRepo = opts.repo.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const defaultContextPath = path.join(
-            '.cache',
-            'gh-pulse-scout',
-            `${safeRepo}-issues-${opts.days}d.md`,
+        const { corpus, contextPath } = buildAndDumpCorpus(
+            issues,
+            opts,
+            'Full issue corpus (attachment)',
         );
-        const contextPath = opts.contextFile ?? defaultContextPath;
-        try {
-            const dir = path.dirname(contextPath);
-            if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
-            const header =
-                `# Issue corpus — ${opts.repo}\n` +
-                `Window: last ${opts.days} days\n` +
-                `Issues: ${issues.length}\n\n---\n\n`;
-            fs.writeFileSync(contextPath, header + corpus.fullText, 'utf8');
-            process.stderr.write(
-                chalk.gray(`→ Full issue corpus (attachment) written to ${contextPath}\n`),
-            );
-        } catch (err) {
-            process.stderr.write(
-                chalk.yellow(
-                    `⚠️  Could not write corpus file: ${err instanceof Error ? err.message : String(err)}\n`,
-                ),
-            );
-        }
 
         const prompt = buildPrompt(analysis, corpus, contextPath);
         if (opts.promptDump === '') {
@@ -182,39 +181,9 @@ async function run(opts: CliOptions): Promise<void> {
                 chalk.yellow('⚠️  OPENAI_API_KEY is not set, skipping AI summary.\n'),
             );
         } else {
-            const corpus = buildIssueCorpus(issues, {
-                maxContextChars: opts.maxContextChars,
-                maxIssueBodyChars: opts.maxIssueBodyChars,
-                maxIssuesInContext: opts.maxIssuesInContext,
-            });
-
             // Always dump the full untruncated corpus to a file so the user can
             // re-feed it manually to any LLM client that supports attachments.
-            const safeRepo = opts.repo.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const defaultContextPath = path.join(
-                '.cache',
-                'gh-pulse-scout',
-                `${safeRepo}-issues-${opts.days}d.md`,
-            );
-            const contextPath = opts.contextFile ?? defaultContextPath;
-            try {
-                const dir = path.dirname(contextPath);
-                if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
-                const header =
-                    `# Issue corpus — ${opts.repo}\n` +
-                    `Window: last ${opts.days} days\n` +
-                    `Issues: ${issues.length}\n\n---\n\n`;
-                fs.writeFileSync(contextPath, header + corpus.fullText, 'utf8');
-                process.stderr.write(
-                    chalk.gray(`→ Full issue corpus written to ${contextPath}\n`),
-                );
-            } catch (err) {
-                process.stderr.write(
-                    chalk.yellow(
-                        `⚠️  Could not write corpus file: ${err instanceof Error ? err.message : String(err)}\n`,
-                    ),
-                );
-            }
+            const { corpus, contextPath } = buildAndDumpCorpus(issues, opts, 'Full issue corpus');
 
             process.stderr.write(
                 chalk.gray(
@@ -248,6 +217,109 @@ async function run(opts: CliOptions): Promise<void> {
         fs.writeFileSync(opts.output, stripAnsi(output), 'utf8');
         process.stderr.write(chalk.gray(`→ Report written to ${opts.output}\n`));
     }
+}
+
+/**
+ * Resolve the AI model configuration from the environment, print it (with the
+ * API key masked), and attempt a minimal connectivity probe so users can verify
+ * their credentials and base URL before running a full report.
+ */
+async function runModelCheck(): Promise<void> {
+    const apiKey = process.env['OPENAI_API_KEY'];
+    const baseURL = process.env['OPENAI_BASE_URL'];
+    const model = process.env['OPENAI_MODEL'] ?? 'gpt-4o-mini';
+    const upload = process.env['OPENAI_UPLOAD_CONTEXT'] === '1';
+
+    const mask = (s: string | undefined): string => {
+        if (!s) return chalk.red('(not set)');
+        if (s.length <= 8) return chalk.green('*'.repeat(s.length));
+        return chalk.green(`${s.slice(0, 4)}…${s.slice(-4)} (len=${s.length})`);
+    };
+
+    process.stdout.write(chalk.bold('AI model configuration\n'));
+    process.stdout.write(`  OPENAI_API_KEY        : ${mask(apiKey)}\n`);
+    process.stdout.write(
+        `  OPENAI_BASE_URL       : ${baseURL ? chalk.green(baseURL) : chalk.gray('(default: https://api.openai.com/v1)')}\n`,
+    );
+    process.stdout.write(
+        `  OPENAI_MODEL          : ${chalk.green(model)}${process.env['OPENAI_MODEL'] ? '' : chalk.gray(' (default)')}\n`,
+    );
+    process.stdout.write(
+        `  OPENAI_UPLOAD_CONTEXT : ${upload ? chalk.green('1 (enabled)') : chalk.gray('0 (disabled)')}\n`,
+    );
+    process.stdout.write('\n');
+
+    if (!apiKey) {
+        process.stderr.write(
+            chalk.red('✖ OPENAI_API_KEY is required for the connectivity probe.\n'),
+        );
+        process.exit(1);
+    }
+
+    process.stdout.write(chalk.gray('→ Probing model with a minimal request...\n'));
+    const started = Date.now();
+    try {
+        const result = await checkModel({ apiKey, baseURL, model });
+        const elapsed = Date.now() - started;
+        process.stdout.write(chalk.green(`✔ Model responded in ${elapsed} ms\n`));
+        process.stdout.write(
+            `  model returned : ${chalk.cyan(result.model ?? '(unknown)')}\n`,
+        );
+        if (result.usage) {
+            process.stdout.write(
+                `  tokens         : prompt=${result.usage.prompt_tokens ?? '?'}, completion=${result.usage.completion_tokens ?? '?'}, total=${result.usage.total_tokens ?? '?'}\n`,
+            );
+        }
+        process.stdout.write(
+            `  reply          : ${chalk.dim(JSON.stringify(result.reply))}\n`,
+        );
+    } catch (err) {
+        const elapsed = Date.now() - started;
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(chalk.red(`✖ Probe failed after ${elapsed} ms: ${msg}\n`));
+        process.exit(1);
+    }
+}
+
+/**
+ * Build the issue corpus and always persist the full, untruncated dump to a
+ * Markdown file so it can be re-fed manually to any LLM client. Returns the
+ * built corpus together with the resolved file path. Write failures are
+ * non-fatal and only emit a warning.
+ */
+function buildAndDumpCorpus(
+    issues: IssueData[],
+    opts: CliOptions,
+    successLabel: string,
+): { corpus: CorpusResult; contextPath: string } {
+    const corpus = buildIssueCorpus(issues, {
+        maxContextChars: opts.maxContextChars,
+        maxIssueBodyChars: opts.maxIssueBodyChars,
+        maxIssuesInContext: opts.maxIssuesInContext,
+    });
+
+    const safeRepo = opts.repo.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const contextPath =
+        opts.contextFile ??
+        path.join('.cache', 'gh-pulse-scout', `${safeRepo}-issues-${opts.days}d.md`);
+    try {
+        const dir = path.dirname(contextPath);
+        if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
+        const header =
+            `# Issue corpus — ${opts.repo}\n` +
+            `Window: last ${opts.days} days\n` +
+            `Issues: ${issues.length}\n\n---\n\n`;
+        fs.writeFileSync(contextPath, header + corpus.fullText, 'utf8');
+        process.stderr.write(chalk.gray(`→ ${successLabel} written to ${contextPath}\n`));
+    } catch (err) {
+        process.stderr.write(
+            chalk.yellow(
+                `⚠️  Could not write corpus file: ${err instanceof Error ? err.message : String(err)}\n`,
+            ),
+        );
+    }
+
+    return { corpus, contextPath };
 }
 
 function stripAnsi(s: string): string {

@@ -50,7 +50,7 @@ gh-pulse-scout --repo <owner/repo> [options]
 
 | Flag                          | Description                                                                        | Default |
 | ----------------------------- | ---------------------------------------------------------------------------------- | ------- |
-| `-r, --repo <owner/repo>`     | Target repository. **Required.**                                                   | —       |
+| `-r, --repo <owner/repo>`     | Target repository. **Required** (except with `--model-check`).                     | —       |
 | `-d, --days <n>`              | Lookback window in days.                                                           | `30`    |
 | `--no-ai`                     | Skip AI summary generation.                                                        | off     |
 | `--no-cache`                  | Disable local cache.                                                               | off     |
@@ -61,6 +61,8 @@ gh-pulse-scout --repo <owner/repo> [options]
 | `--max-issue-body-chars <n>`  | Max chars retained per issue body in the inlined corpus.                           | `1200`  |
 | `--max-issues-in-context <n>` | Hard cap on the number of issues inlined.                                          | `80`    |
 | `--context-file <file>`       | Path to write the **full**, untruncated issue corpus (defaults to `.cache/...md`). | —       |
+| `--prompt [file]`             | In `--no-ai` mode, dump the prompt that would be sent to the model (stdout if no path). | —       |
+| `--model-check`               | Print the resolved AI model config and run a minimal connectivity probe, then exit. | off     |
 
 ### Feeding richer context to the model
 
@@ -81,6 +83,9 @@ gh-pulse-scout --repo nodejs/node --days 14 --no-ai --json
 
 # Generate report and write it to a file (then pipe it wherever you like)
 gh-pulse-scout --repo my-org/my-repo -o pulse-report.md
+
+# Verify the AI model configuration and connectivity (no --repo needed)
+gh-pulse-scout --model-check
 ```
 
 ## GitHub Action usage

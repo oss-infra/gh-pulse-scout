@@ -21,9 +21,7 @@ export function parseRepo(repo: string): { owner: string; name: string } {
 export async function fetchIssues(repo: string, opts: FetchOptions): Promise<IssueData[]> {
     const { owner, name } = parseRepo(repo);
     const since = dayjs().subtract(opts.days, 'day').toISOString();
-    // Bump the version suffix whenever the IssueData shape changes so stale
-    // cache files are ignored automatically.
-    const cacheKey = `issues_:${owner}:${name}:${opts.days}`;
+    const cacheKey = `issues:${owner}:${name}:${opts.days}`;
 
     if (opts.useCache && opts.cache) {
         const cached = opts.cache.get<IssueData[]>(cacheKey);
