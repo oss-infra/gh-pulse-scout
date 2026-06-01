@@ -58,17 +58,19 @@ export interface AnalysisResult {
 }
 
 export interface CliOptions {
-    repo: string;
-    days: number;
-    noAi: boolean;
-    noCache: boolean;
-    cacheTtl: number;
-    json: boolean;
-    output?: string;
-    maxContextChars: number;
-    maxIssueBodyChars: number;
-    maxIssuesInContext: number;
-    contextFile?: string;
-    /** When set in --no-ai mode, dump the AI prompt for debugging. Empty string means stdout. */
-    promptDump?: string;
+  repo: string;
+  days: number;
+  noAi: boolean;
+  noCache: boolean;
+  cacheTtl: number;
+  json: boolean;
+  output?: string;
+  maxContextChars: number;
+  maxIssueBodyChars: number;
+  maxIssuesInContext: number;
+  contextFile?: string;
+  /** When set in --no-ai mode, dump the AI prompt for debugging. Empty string means stdout. */
+  promptDump?: string;
+  /** Output language for the AI summary. Use "auto" (default) to let the model choose, or a name/code like "English", "Chinese", "zh", "ja". */
+  language?: string;
 }
