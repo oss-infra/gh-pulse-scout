@@ -34,6 +34,10 @@ inputs:
     description: "Optional path to write the rendered report."
     required: false
     default: "pulse-report.md"
+  language:
+    description: "Output language for the AI summary. Use 'auto' to let the model decide, or a name/code like 'English', 'Chinese', 'zh', 'ja'."
+    required: false
+    default: "auto"
 
 outputs:
   report-file:
@@ -82,6 +86,7 @@ runs:
           --repo "${{ inputs.repo }}" \
           --days "${{ inputs.days }}" \
           --output "${{ inputs.output-file }}" \
+          --language "${{ inputs.language }}" \
           $AI_FLAG
 
         echo "report-file=${{ inputs.output-file }}" >> "$GITHUB_OUTPUT"

@@ -9,70 +9,91 @@ import { analyzeIssues } from './analyzer.js';
 import { generateAiReport, buildPrompt, checkModel } from './ai.js';
 import { buildIssueCorpus } from './corpus.js';
 import type { CorpusResult } from './corpus.js';
-import { renderConsoleReport } from './reporter.js';
+import { renderMarkdownReport } from "./reporter.js";
 import { Cache } from './cache.js';
 import type { CliOptions, IssueData } from './types.js';
 
 const program = new Command();
 
 program
-    .name('gh-pulse-scout')
-    .description('Fetch recent GitHub issues for a repo and generate an AI-powered status report.')
-    .version('0.1.0')
-    .option('-r, --repo <owner/repo>', 'GitHub repository, e.g. "octocat/Hello-World"')
-    .option('-d, --days <number>', 'Lookback window in days', (v) => parseInt(v, 10), 30)
-    .option('--no-ai', 'Skip AI summary generation')
-    .option('--no-cache', 'Disable local cache')
-    .option('--cache-ttl <seconds>', 'Cache TTL in seconds', (v) => parseInt(v, 10), 3600)
-    .option('--json', 'Print analysis as JSON only', false)
-    .option('-o, --output <file>', 'Write the full report (text + AI) to a file')
-    .option(
-        '--max-context-chars <n>',
-        'Max characters of inlined issue corpus passed to the model',
-        (v) => parseInt(v, 10),
-        60000,
-    )
-    .option(
-        '--max-issue-body-chars <n>',
-        'Max characters retained per issue body in the inlined corpus',
-        (v) => parseInt(v, 10),
-        1200,
-    )
-    .option(
-        '--max-issues-in-context <n>',
-        'Hard cap on number of issues considered for the inlined corpus',
-        (v) => parseInt(v, 10),
-        80,
-    )
-    .option(
-        '--context-file <file>',
-        'Path to write the full (untruncated) issue corpus. Defaults to a path under .cache/ when AI is enabled.',
-    )
-    .option(
-        '--prompt [file]',
-        'In --no-ai mode, dump the prompt (and corpus attachment path) that would be sent to the AI model. Writes to <file>, or stdout if no path is given. Useful for debugging.',
-)
-    .option(
-        '--model-check',
-        'Print the resolved AI model configuration (from env/flags) and attempt a minimal connectivity probe. Useful for debugging credentials and base URLs.',
-        false,
-    );
+  .name("gh-pulse-scout")
+  .description(
+    "Fetch recent GitHub issues for a repo and generate an AI-powered status report.",
+  )
+  .version("0.1.0")
+  .option(
+    "-r, --repo <owner/repo>",
+    'GitHub repository, e.g. "octocat/Hello-World"',
+  )
+  .option(
+    "-d, --days <number>",
+    "Lookback window in days",
+    (v) => parseInt(v, 10),
+    30,
+  )
+  .option("--no-ai", "Skip AI summary generation")
+  .option("--no-cache", "Disable local cache")
+  .option(
+    "--cache-ttl <seconds>",
+    "Cache TTL in seconds",
+    (v) => parseInt(v, 10),
+    3600,
+  )
+  .option("--json", "Print analysis as JSON only", false)
+  .option("-o, --output <file>", "Write the full report (text + AI) to a file")
+  .option(
+    "--max-context-chars <n>",
+    "Max characters of inlined issue corpus passed to the model",
+    (v) => parseInt(v, 10),
+    60000,
+  )
+  .option(
+    "--max-issue-body-chars <n>",
+    "Max characters retained per issue body in the inlined corpus",
+    (v) => parseInt(v, 10),
+    1200,
+  )
+  .option(
+    "--max-issues-in-context <n>",
+    "Hard cap on number of issues considered for the inlined corpus",
+    (v) => parseInt(v, 10),
+    80,
+  )
+  .option(
+    "--context-file <file>",
+    "Path to write the full (untruncated) issue corpus. Defaults to a path under .cache/ when AI is enabled.",
+  )
+  .option(
+    "--prompt [file]",
+    "In --no-ai mode, dump the prompt (and corpus attachment path) that would be sent to the AI model. Writes to <file>, or stdout if no path is given. Useful for debugging.",
+  )
+  .option(
+    "--model-check",
+    "Print the resolved AI model configuration (from env/flags) and attempt a minimal connectivity probe. Useful for debugging credentials and base URLs.",
+    false,
+  )
+  .option(
+    "-l, --language <lang>",
+    'Output language for the AI summary. Use "auto" to let the model decide, or a name/code like "English", "Chinese", "zh", "ja". Env: GH_PULSE_LANGUAGE.',
+    process.env["GH_PULSE_LANGUAGE"] ?? "auto",
+  );
 
 program.parseAsync(process.argv).then(async () => {
     const raw = program.opts<{
-        repo?: string;
-        days: number;
-        ai: boolean;
-        cache: boolean;
-        cacheTtl: number;
-        json: boolean;
-        output?: string;
-        maxContextChars: number;
-        maxIssueBodyChars: number;
-        maxIssuesInContext: number;
-        contextFile?: string;
-        prompt?: string | boolean;
-        modelCheck?: boolean;
+      repo?: string;
+      days: number;
+      ai: boolean;
+      cache: boolean;
+      cacheTtl: number;
+      json: boolean;
+      output?: string;
+      maxContextChars: number;
+      maxIssueBodyChars: number;
+      maxIssuesInContext: number;
+      contextFile?: string;
+      prompt?: string | boolean;
+      modelCheck?: boolean;
+      language?: string;
     }>();
 
     if (raw.modelCheck) {
@@ -98,18 +119,19 @@ program.parseAsync(process.argv).then(async () => {
     else if (typeof raw.prompt === 'string') promptDump = raw.prompt;
 
     const opts: CliOptions = {
-        repo: raw.repo,
-        days: raw.days,
-        noAi: !raw.ai,
-        noCache: !raw.cache,
-        cacheTtl: raw.cacheTtl,
-        json: raw.json,
-        output: raw.output,
-        maxContextChars: raw.maxContextChars,
-        maxIssueBodyChars: raw.maxIssueBodyChars,
-        maxIssuesInContext: raw.maxIssuesInContext,
-        contextFile: raw.contextFile,
-        promptDump,
+      repo: raw.repo,
+      days: raw.days,
+      noAi: !raw.ai,
+      noCache: !raw.cache,
+      cacheTtl: raw.cacheTtl,
+      json: raw.json,
+      output: raw.output,
+      maxContextChars: raw.maxContextChars,
+      maxIssueBodyChars: raw.maxIssueBodyChars,
+      maxIssuesInContext: raw.maxIssuesInContext,
+      contextFile: raw.contextFile,
+      promptDump,
+      language: raw.language,
     };
 
     try {
@@ -125,98 +147,118 @@ program.parseAsync(process.argv).then(async () => {
 });
 
 async function run(opts: CliOptions): Promise<void> {
-    const token = process.env['GITHUB_TOKEN'];
-    if (!token) {
+  const token = process.env["GITHUB_TOKEN"];
+  if (!token) {
+    process.stderr.write(
+      chalk.yellow(
+        "⚠️  GITHUB_TOKEN is not set. Anonymous GitHub API calls are heavily rate-limited.\n",
+      ),
+    );
+  }
+
+  const cache = new Cache(opts.cacheTtl);
+  process.stderr.write(
+    chalk.gray(
+      `→ Fetching issues for ${opts.repo} (last ${opts.days} days)...\n`,
+    ),
+  );
+
+  const issues = await fetchIssues(opts.repo, {
+    token,
+    days: opts.days,
+    cache,
+    useCache: !opts.noCache,
+  });
+  process.stderr.write(
+    chalk.gray(`  fetched ${issues.length} issues (PRs excluded)\n`),
+  );
+
+  const analysis = analyzeIssues(opts.repo, opts.days, issues);
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(analysis, null, 2) + "\n");
+    return;
+  }
+
+  if (opts.noAi && opts.promptDump !== undefined) {
+    const { corpus, contextPath } = buildAndDumpCorpus(
+      issues,
+      opts,
+      "Full issue corpus (attachment)",
+    );
+
+    const prompt = buildPrompt(analysis, corpus, contextPath, opts.language);
+    if (opts.promptDump === "") {
+      process.stdout.write(prompt + "\n");
+    } else {
+      const dir = path.dirname(opts.promptDump);
+      if (dir && dir !== ".") fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(opts.promptDump, prompt, "utf8");
+      process.stderr.write(
+        chalk.gray(
+          `→ AI prompt written to ${opts.promptDump} (attachment: ${contextPath})\n`,
+        ),
+      );
+    }
+    return;
+  }
+
+  let aiReport: string | undefined;
+  if (!opts.noAi) {
+    const apiKey = process.env["OPENAI_API_KEY"];
+    if (!apiKey) {
+      process.stderr.write(
+        chalk.yellow("⚠️  OPENAI_API_KEY is not set, skipping AI summary.\n"),
+      );
+    } else {
+      // Always dump the full untruncated corpus to a file so the user can
+      // re-feed it manually to any LLM client that supports attachments.
+      const { corpus, contextPath } = buildAndDumpCorpus(
+        issues,
+        opts,
+        "Full issue corpus",
+      );
+
+      process.stderr.write(
+        chalk.gray(
+          `→ Generating AI summary (inlining ${corpus.includedCount}/${issues.length} issues, ${corpus.inlineText.length} chars${corpus.truncated ? ", some bodies truncated" : ""})...\n`,
+        ),
+      );
+      try {
+        aiReport = await generateAiReport(analysis, corpus, {
+          apiKey,
+          baseURL: process.env["OPENAI_BASE_URL"],
+          model: process.env["OPENAI_MODEL"],
+          contextFilePath: contextPath,
+          uploadContextFile: process.env["OPENAI_UPLOAD_CONTEXT"] === "1",
+          language: opts.language,
+        });
+      } catch (err) {
         process.stderr.write(
-            chalk.yellow(
-                '⚠️  GITHUB_TOKEN is not set. Anonymous GitHub API calls are heavily rate-limited.\n',
-            ),
+          chalk.yellow(
+            `⚠️  AI summary failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          ),
         );
+      }
     }
+  }
 
-    const cache = new Cache(opts.cacheTtl);
-    process.stderr.write(chalk.gray(`→ Fetching issues for ${opts.repo} (last ${opts.days} days)...\n`));
+  // Build the Markdown report once; use it for both stdout and the file
+  // output so workflow logs match the value exposed via `--output` /
+  // `steps.*.outputs.report`. This also avoids the cli-table3 box-drawing
+  // characters that DingTalk and other chat tools can't render.
+  const md = renderMarkdownReport(analysis, aiReport);
+  process.stdout.write(md.endsWith("\n") ? md : md + "\n");
 
-    const issues = await fetchIssues(opts.repo, {
-        token,
-        days: opts.days,
-        cache,
-        useCache: !opts.noCache,
-    });
-    process.stderr.write(chalk.gray(`  fetched ${issues.length} issues (PRs excluded)\n`));
-
-    const analysis = analyzeIssues(opts.repo, opts.days, issues);
-
-    if (opts.json) {
-        process.stdout.write(JSON.stringify(analysis, null, 2) + '\n');
-        return;
-    }
-
-    if (opts.noAi && opts.promptDump !== undefined) {
-        const { corpus, contextPath } = buildAndDumpCorpus(
-            issues,
-            opts,
-            'Full issue corpus (attachment)',
-        );
-
-        const prompt = buildPrompt(analysis, corpus, contextPath);
-        if (opts.promptDump === '') {
-            process.stdout.write(prompt + '\n');
-        } else {
-            const dir = path.dirname(opts.promptDump);
-            if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(opts.promptDump, prompt, 'utf8');
-            process.stderr.write(
-                chalk.gray(`→ AI prompt written to ${opts.promptDump} (attachment: ${contextPath})\n`),
-            );
-        }
-        return;
-    }
-
-    let aiReport: string | undefined;
-    if (!opts.noAi) {
-        const apiKey = process.env['OPENAI_API_KEY'];
-        if (!apiKey) {
-            process.stderr.write(
-                chalk.yellow('⚠️  OPENAI_API_KEY is not set, skipping AI summary.\n'),
-            );
-        } else {
-            // Always dump the full untruncated corpus to a file so the user can
-            // re-feed it manually to any LLM client that supports attachments.
-            const { corpus, contextPath } = buildAndDumpCorpus(issues, opts, 'Full issue corpus');
-
-            process.stderr.write(
-                chalk.gray(
-                    `→ Generating AI summary (inlining ${corpus.includedCount}/${issues.length} issues, ${corpus.inlineText.length} chars${corpus.truncated ? ', some bodies truncated' : ''})...\n`,
-                ),
-            );
-            try {
-                aiReport = await generateAiReport(analysis, corpus, {
-                    apiKey,
-                    baseURL: process.env['OPENAI_BASE_URL'],
-                    model: process.env['OPENAI_MODEL'],
-                    contextFilePath: contextPath,
-                    uploadContextFile: process.env['OPENAI_UPLOAD_CONTEXT'] === '1',
-                });
-            } catch (err) {
-                process.stderr.write(
-                    chalk.yellow(
-                        `⚠️  AI summary failed: ${err instanceof Error ? err.message : String(err)}\n`,
-                    ),
-                );
-            }
-        }
-    }
-
-    const output = renderConsoleReport(analysis, aiReport);
-    process.stdout.write(output + '\n');
-
-    if (opts.output) {
-        const dir = path.dirname(opts.output);
-        if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(opts.output, stripAnsi(output), 'utf8');
-        process.stderr.write(chalk.gray(`→ Report written to ${opts.output}\n`));
-    }
+  if (opts.output) {
+    const dir = path.dirname(opts.output);
+    if (dir && dir !== ".") fs.mkdirSync(dir, { recursive: true });
+    // Always end with a single trailing newline so callers piping this
+    // file into a `$GITHUB_OUTPUT` heredoc don't trip the runner's
+    // "Matching delimiter not found" error.
+    fs.writeFileSync(opts.output, md.endsWith("\n") ? md : md + "\n", "utf8");
+    process.stderr.write(chalk.gray(`→ Report written to ${opts.output}\n`));
+  }
 }
 
 /**
@@ -320,13 +362,4 @@ function buildAndDumpCorpus(
     }
 
     return { corpus, contextPath };
-}
-
-function stripAnsi(s: string): string {
-    // Minimal ANSI escape stripper to keep saved file clean.
-    return s.replace(
-        // eslint-disable-next-line no-control-regex
-        /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PRZcf-ntqry=><~]))/g,
-        '',
-    );
 }
